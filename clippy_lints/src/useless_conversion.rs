@@ -188,20 +188,42 @@ impl<'tcx> LateLintPass<'tcx> for UselessConversion {
                     && let &[from_ty, to_ty] = args.into_type_list(cx.tcx).as_slice()
                     && same_type_modulo_regions(from_ty, to_ty)
                 {
-                    span_lint_and_then(
-                        cx,
-                        USELESS_CONVERSION,
-                        e.span.with_lo(recv.span.hi()),
-                        format!("useless conversion to the same type: `{from_ty}`"),
-                        |diag| {
-                            diag.suggest_remove_item(
-                                cx,
-                                e.span.with_lo(recv.span.hi()),
-                                "consider removing",
-                                Applicability::MachineApplicable,
-                            );
-                        },
-                    );
+                    // `source_callsite()` to get the actual source location spans and avoid macro expansion issues
+                    let recv_source_span = recv.span.source_callsite();
+
+                    // validate that the receiver span ends before or at the expression end to prevent range underflow
+                    if recv_source_span.hi() <= e.span.hi() {
+                        span_lint_and_then(
+                            cx,
+                            USELESS_CONVERSION,
+                            e.span.with_lo(recv_source_span.hi()),
+                            format!("useless conversion to the same type: `{from_ty}`"),
+                            |diag| {
+                                diag.suggest_remove_item(
+                                    cx,
+                                    e.span.with_lo(recv_source_span.hi()),
+                                    "consider removing",
+                                    Applicability::MachineApplicable,
+                                );
+                            },
+                        );
+                    } else {
+                        // fallback when spans indicate different behaviour
+                        span_lint_and_then(
+                            cx,
+                            USELESS_CONVERSION,
+                            e.span,
+                            format!("useless conversion to the same type: `{from_ty}`"),
+                            |diag| {
+                                diag.suggest_remove_item(
+                                    cx,
+                                    e.span,
+                                    "consider removing",
+                                    Applicability::MaybeIncorrect, // Use MaybeIncorrect for macro scenarios
+                                );
+                            },
+                        );
+                    }
                 }
             },
 
@@ -295,12 +317,25 @@ impl<'tcx> LateLintPass<'tcx> for UselessConversion {
                                         vec![(receiver_span.shrink_to_lo(), adjustments)]
                                     };
                                     let plural = if depth == 0 { "" } else { "s" };
-                                    sugg.push((e.span.with_lo(receiver_span.hi()), String::new()));
-                                    diag.multipart_suggestion(
-                                        format!("consider removing the `.into_iter()`{plural}"),
-                                        sugg,
-                                        Applicability::MachineApplicable,
-                                    );
+                                    // `source_callsite() to get real source location spans and avoid macro
+                                    // expansion issues
+                                    let receiver_actual_span = into_iter_recv.span.source_callsite();
+
+                                    // validate to prevent range underflow
+                                    if receiver_actual_span.hi() <= e.span.hi() {
+                                        sugg.push((e.span.with_lo(receiver_actual_span.hi()), String::new()));
+                                        diag.multipart_suggestion(
+                                            format!("consider removing the `.into_iter()`{plural}"),
+                                            sugg,
+                                            Applicability::MachineApplicable,
+                                        );
+                                    } else {
+                                        diag.multipart_suggestion(
+                                            format!("consider removing the `.into_iter()`{plural}"),
+                                            vec![(e.span, String::new())], // Use whole expression span
+                                            Applicability::MaybeIncorrect, // indicate caution
+                                        );
+                                    }
                                     diag.span_note(span, "this parameter accepts any `IntoIterator`, so you don't need to call `.into_iter()`");
                                 },
                             );

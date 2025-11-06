@@ -442,3 +442,19 @@ fn issue14739() {
     let _ = R.map(|_x| 0);
     //~^ useless_conversion
 }
+
+// from GitHub issue #15787; range underflow with macro calls as receivers
+fn issue_15787() {
+    use std::future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, ready};
+
+    fn foo(cx: &mut Context<'_>) -> Poll<u32> {
+        let mut fut = future::ready(Ok::<u32, u32>(42));
+        let fut = Pin::new(&mut fut);
+        let num: Result<u32, u32> = ready!(fut.poll(cx));
+        //~^ useless_conversion
+        Poll::Ready(0)
+    }
+    let _ = foo;
+}
